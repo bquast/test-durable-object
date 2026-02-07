@@ -1,40 +1,38 @@
 export class MyCounter {
   constructor(state, env) {
-    this.state = state;
-    // 'blockConcurrencyWhile' ensures we initialize before handling requests
-    this.state.blockConcurrencyWhile(async () => {
-      let stored = await this.state.storage.get("value");
-      this.value = stored || 0;
-    });
+    this.storage = state.storage;
+    // Create the table if it doesn't exist
+    this.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS counter (
+        id INTEGER PRIMARY KEY CHECK (id = 1), 
+        val INTEGER
+      )
+    `);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
-    let currentValue = this.value;
 
     if (url.pathname === "/increment") {
-      currentValue = ++this.value;
-      await this.state.storage.put("value", this.value);
-    } else if (url.pathname === "/decrement") {
-      currentValue = --this.value;
-      await this.state.storage.put("value", this.value);
+      // Atomic increment in SQL
+      this.storage.sql.exec(`
+        INSERT INTO counter (id, val) VALUES (1, 1)
+        ON CONFLICT(id) DO UPDATE SET val = val + 1
+      `);
     }
 
-    return new Response(`Count is: ${currentValue}`);
+    // Get the current value
+    const result = [...this.storage.sql.exec("SELECT val FROM counter WHERE id = 1")];
+    const count = result.length > 0 ? result[0].val : 0;
+
+    return new Response(`Count is: ${count}`);
   }
 }
 
-// 2. The Worker Entry Point
 export default {
   async fetch(request, env) {
-    // Every DO needs a unique ID. 
-    // 'idFromName' creates a persistent ID based on a string (like a username or 'global')
-    let id = env.COUNTER_OBJECT.idFromName("global-stats");
-    
-    // Get the "stub" for that specific object
-    let obj = env.COUNTER_OBJECT.get(id);
-
-    // Forward the request to the Durable Object
-    return await obj.fetch(request);
-  },
+    const id = env.COUNTER_OBJECT.idFromName("global-test");
+    const obj = env.COUNTER_OBJECT.get(id);
+    return obj.fetch(request);
+  }
 };
